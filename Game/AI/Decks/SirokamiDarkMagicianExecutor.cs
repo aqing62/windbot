@@ -9,7 +9,7 @@ using WindBot.Game.AI;
 namespace WindBot.Game.AI.Decks
 {
     /// <summary>
-    /// 「白神」—— 黑魔术师卡组。
+    /// 「白神 Sirokami」—— 黑魔术师卡组。
     ///
     /// 主线：
     ///   魔术师之杖 / 魂之仆人 检索「黑魔导的幕帘」→ 特召黑魔术师
@@ -18,8 +18,8 @@ namespace WindBot.Game.AI.Decks
     ///   → 塞勒涅（Link-3）③ 拉回师徒
     ///   终场：黑魔导阵 + 永远之魂 + 龙骑士 黑魔术师
     /// </summary>
-[Deck("Hakushin", "AI_Hakushin", "Normal")]
-    public class HakushinExecutor : DarkMagicianExecutor
+[Deck("SirokamiDarkMagician", "AI_SirokamiDarkMagician", "Normal")]
+    public class SirokamiDarkMagicianExecutor : DarkMagicianExecutor
     {
         public class CardId
         {
@@ -156,7 +156,7 @@ namespace WindBot.Game.AI.Decks
         private int _illusionStage;
         private int _illusionSearchId;
 
-        public HakushinExecutor(GameAI ai, Duel duel)
+        public SirokamiDarkMagicianExecutor(GameAI ai, Duel duel)
             : base(ai, duel)
         {
             int baseCount = Executors.Count;   // 基类已注册的条数
