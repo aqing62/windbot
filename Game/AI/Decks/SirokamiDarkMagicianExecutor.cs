@@ -9,16 +9,22 @@ using WindBot.Game.AI;
 namespace WindBot.Game.AI.Decks
 {
     /// <summary>
-    /// 「白神 Sirokami」—— 黑魔术师卡组。
+    /// 「阿图姆」——黑魔术师 / 混沌黑魔术骑士（DIY）卡组。
     ///
-    /// 主线：
-    ///   魔术师之杖 / 魂之仆人 检索「黑魔导的幕帘」→ 特召黑魔术师
-    ///   → 除外黑魔术师特召「毁灭之黑魔术师」→ ② 检索关键魔陷
-    ///   → 魔导原典 克劳利（Link-2）→ 蒂迈欧之眼光出「超魔导师-黑魔术师徒」
-    ///   → 塞勒涅（Link-3）③ 拉回师徒
-    ///   终场：黑魔导阵 + 永远之魂 + 龙骑士 黑魔术师
+    /// 主展开线（幕帘线）：
+    ///   杖 → 检索「黑魔导的幕帘」→ 幕帘特召黑魔术师 + 追加检索
+    ///   → 本回合已发动魔法卡，除外黑魔术师特召「毁灭之黑魔术师」
+    ///   → 毁灭②检索（永远之魂 / 黑魔导阵 / 蒂迈欧之眼光）
+    ///   → 蒂迈欧之眼光把毁灭变成「龙骑士 黑魔术师」
+    ///   终场：黑魔导阵 + 龙骑士 黑魔术师 + 永远之魂
+    ///
+    /// 备用线（幕帘组件不全时）：
+    ///   超魔导师-黑魔术师徒（融合）+ 师徒的牵绊 → 少女 + 盖「黑·爆·裂·破·魔·导」
+    ///
+    /// 注意：本卡组含 2 张 DIY 卡，启动时必须同时加载 DIY 卡库：
+    ///   DbPath=cards.cdb;DIY_Sirokami.cdb
     /// </summary>
-[Deck("SirokamiDarkMagician", "AI_SirokamiDarkMagician", "Normal")]
+    [Deck("SirokamiDarkMagician", "AI_SirokamiDarkMagician", "Normal")]
     public class SirokamiDarkMagicianExecutor : DarkMagicianExecutor
     {
         public class CardId
@@ -133,6 +139,9 @@ namespace WindBot.Game.AI.Decks
 
         private bool _chaosKnightByKnightsTitle;
         private bool _spellActivatedThisTurn;
+
+        /// <summary>本回合是否发过「魂之仆人」：阵要等它先放顶，别抢在前面把①用掉。</summary>
+        private bool _soulServantUsedThisTurn;
 
         /// <summary>本回合是否发动过「蒂迈欧之眼光」（它拉出来的怪兽下个回合结束时会被除外）。</summary>
         private bool _eyeActivatedThisTurn;
@@ -672,10 +681,15 @@ AddExecutor(ExecutorType.Summon, CardId.MagiciansRod, () => true);
             return CardId.DarkMagicalCircle;
         }
 
-        /// <summary>毁灭之黑魔术师②的检索：主轴先拿蒂迈欧之眼光。</summary>
+        /// <summary>
+        /// 毁灭② 的检索。
+        /// 注：曾把「帘幕」放第一位（原石线要它），但 100 局从 39% 掉到 27% —— 帘幕在
+        /// 幕帘起手的线里早就在手/墓地了，反而把「王之仆人」这个真正的铺场点挤掉。已回滚。
+        /// 用户给的原石线（原石→毁灭拿帘幕→帘幕拉少女→魂仆放眼光→抽2→师徒→塞勒涅拉回）
+        /// 要按线路做，不能靠全局优先级。
+        /// </summary>
         private int DestructionSearchTarget()
         {
-            // 毁灭② 检索优先级（手卡/场上已有就跳过）：
             // 王之仆人 > 黑魔导阵 > 魔术师的救出 > 对峙的宿命 > 魂之仆人
             if (!Bot.HasInHand(CardId.ServantOfTheKing) && !Bot.HasInMonstersZone(CardId.ServantOfTheKing))
                 return CardId.ServantOfTheKing;
@@ -884,6 +898,10 @@ AddExecutor(ExecutorType.Summon, CardId.MagiciansRod, () => true);
 
         private bool DarkMagicalCircleEffect()
         {
+            // 曾试过「有魂仆在手上就先让魂仆放顶、阵等下再开」：实测这种情况
+            // 一局只出现 0~2 次，而且会让阵晚一回合，100 局反而从 41% 掉到 35%，
+            // 所以不拦阵。魂仆自己会在阵开出来之后再放顶（见 SoulServantEffect）。
+
             bool dmJustSummoned = Duel.LastSummonedCards.Any(card =>
                 card != null && card.Controller == 0 && IsDarkMagician(card));
             if (dmJustSummoned && Card.Location == CardLocation.SpellZone && Card.IsFaceup())
@@ -941,6 +959,17 @@ AddExecutor(ExecutorType.Summon, CardId.MagiciansRod, () => true);
                 return false;
             }
 
+            // 永魂还没有着落（场上没有、手里也没有）→ 现在就把永魂从卡组盖下来。
+            // 救出 ① 本身就是「从卡组盖 1 张永远之魂」，捏着等 ② 的结果是
+            // 空场站着看对面铺 6 个回合（对 LV3 的复盘里 7 连「held」然后输掉）。
+            bool soulOnField = Bot.SpellZone.Any(card => card != null && card.IsCode(CardId.EternalSoul));
+            if (!soulOnField && !Bot.HasInHand(CardId.EternalSoul))
+            {
+                Trace("Salvation: grab eternal soul");
+                LineDone(Act.Activate, CardId.MagiciansSalvation);
+                return UniqueFaceupSpell();
+            }
+
             if (Bot.HasInMonstersZone(CardId.TheDarkMagicians))
             {
                 LineDone(Act.Activate, CardId.MagiciansSalvation);
@@ -960,14 +989,19 @@ AddExecutor(ExecutorType.Summon, CardId.MagiciansRod, () => true);
         /// <summary>朔夜时雨：对面特召时丢弃，无效那只怪兽的效果。</summary>
         private bool SayoEffect()
         {
-            // 只无效「效果怪兽」：通常怪兽没效果，无效了也是白丢
+            // 朔夜时雨只该无效「还有效果可无效」的怪兽：
+            //   · 通常怪兽（没有效果）— 无效了也是白丢
+            //   · 已经被无效过的（IsDisabled）— 再无效一次是浪费
             ClientCard target = Duel.LastSummonedCards
-                .Where(card => card != null && card.Controller == 1 && card.HasType(CardType.Effect))
+                .Where(card => card != null
+                    && card.Controller == 1
+                    && card.HasType(CardType.Effect)
+                    && !card.IsDisabled())
                 .OrderByDescending(card => card.Attack)
                 .FirstOrDefault();
             if (target == null)
                 return false;
-            Trace("Sayo: negate " + target.Id);
+            Trace("Sayo: negate " + target.Id + " atk=" + target.Attack);
             AI.SelectCard(target);
             return true;
         }
@@ -1071,6 +1105,20 @@ AddExecutor(ExecutorType.Summon, CardId.MagiciansRod, () => true);
             return true;
         }
 
+        /// <summary>
+        /// 魂之仆人①放顶优先级：融合点 → 展开起点 → 铺场点 → 检索 → 盖永魂 → 黑魔术师。
+        /// 阵要用它来判断「值不值得为魂仆让路」。
+        /// </summary>
+        private static readonly int[] SoulPlaceOrder =
+        {
+            CardId.EyeOfTimaeus,          // 融合点（伪检索，最优先）
+            CardId.DarkMagicCurtain,      // 展开起点
+            CardId.ServantOfTheKing,      // 铺场点
+            CardId.DarkMagicalCircle,     // 检索/除外
+            CardId.MagiciansSalvation,    // 盖永魂
+            CardId.DarkMagician           // 其次黑魔术师
+        };
+
         private bool SoulServantEffect()
         {
             if (Card.Location == CardLocation.Grave)
@@ -1084,9 +1132,14 @@ AddExecutor(ExecutorType.Summon, CardId.MagiciansRod, () => true);
             if (Duel.Phase != DuelPhase.Main1 && Duel.Phase != DuelPhase.Main2)
                 return false;
 
-            // 只在「有阵 或 有师徒」时发：这两个才能把放顶的卡真正拿到手
+            // 什么时候才值得发：放顶的卡得有人帮我拿上来。
+            //   ① 阵已经在场上  → 阵②除外/①检索都能拿
+            //   ② 师徒在场上    → 师徒①抽卡
+            //   ③ 阵还在手里    → 先放顶，再开阵，阵①翻三拿一必中（这是「阵+魂仆」两卡启动）
+            bool circleInHand = Bot.HasInHand(CardId.DarkMagicalCircle);
             bool soulEngine = Bot.SpellZone.Any(card => card != null && card.IsCode(CardId.DarkMagicalCircle))
-                || Bot.HasInMonstersZone(CardId.TheDarkMagicians);
+                || Bot.HasInMonstersZone(CardId.TheDarkMagicians)
+                || circleInHand;
             if (!soulEngine)
             {
                 Trace("SoulServant held: no circle/tdm");
@@ -1095,15 +1148,7 @@ AddExecutor(ExecutorType.Summon, CardId.MagiciansRod, () => true);
 
             // ① 放置卡组顶的正确用法：把「下一张需要的卡」放上去，
             // 靠 师徒①抽卡 或 黑魔导阵②翻三拿一 把它拿到手。
-            int[] soulOrder =
-            {
-                CardId.EyeOfTimaeus,          // 融合点（伪检索，最优先）
-                CardId.DarkMagicCurtain,      // 展开起点
-                CardId.ServantOfTheKing,      // 铺场点
-                CardId.DarkMagicalCircle,     // 检索/除外
-                CardId.MagiciansSalvation,    // 盖永魂
-                CardId.DarkMagician           // 其次黑魔术师
-            };
+            int[] soulOrder = SoulPlaceOrder;
 
             // 放顶优先级：
             //   墓地 2 张永魂 → 放永魂
@@ -1570,8 +1615,8 @@ AddExecutor(ExecutorType.Summon, CardId.MagiciansRod, () => true);
             if (HasDarkMagician() && Bot.GetMonsterCount() >= 2 && !lineWantsCurtain)
                 return false;
 
-            // 关键：幕帘只能拉「手卡·卡组」的黑魔术师。
-            // 拉不到黑魔术师时它会退而求其次拉杖之类的凑数，所以要先把这种情况挡掉。
+            // 关键：幕帘只能拉「手卡·卡组」的怪，拉不到就会退而求其次抓杖之类的凑数。
+            // 正常情况下要黑魔术师（黑魔术少女线要按线路做，不能全局放宽）。
             if (!Bot.HasInHand(CardId.DarkMagician) && !DarkMagicianStillInDeck())
             {
                 Trace("Curtain skipped: no Dark Magician in hand/deck");
@@ -1746,6 +1791,22 @@ AddExecutor(ExecutorType.Summon, CardId.MagiciansRod, () => true);
         /// 混沌斩杀判定：对面 LP &lt; 我方场上攻击力之和 + 3000（混沌）+ 墓地最高攻击力（① 拉回来那只）。
         /// 满足就直接出混沌，不再做师徒 / 龙骑士。
         /// </summary>
+        /// <summary>
+        /// 混沌清场斩杀：对面有怪挡着打不到脸，但我方攻击力总和已经够斩杀
+        /// → 出混沌制驭者，②（解放光+暗各1只）把对面怪兽全部除外，剩下的全体直击。
+        /// 实战 R#5358：对面 10000 LP、场上有怪，我们做了龙骑士被挡住，只打到剩 500。
+        /// </summary>
+        private bool ChaosWipeLethal()
+        {
+            if (Enemy.GetMonsterCount() == 0)
+                return false;   // 没怪挡路时龙骑士/师徒一样能斩杀，不必烧两只怪出混沌
+            int myAttack = Bot.GetMonsters()
+                .Where(card => card != null)
+                .Sum(card => Math.Max(0, card.Attack));
+            // 素材会被换掉，但混沌自己 3000 顶上；②的代价（光+暗各1只）已经算在保守估计里
+            return myAttack + 3000 >= Enemy.LifePoints;
+        }
+
         private bool ChaosLethalPossible()
         {
             int myAttack = Bot.GetMonsters()
@@ -1764,6 +1825,13 @@ AddExecutor(ExecutorType.Summon, CardId.MagiciansRod, () => true);
             // 1) 战斗阶段：混沌制驭者（① 拉墓地 → 再打两拳）
             if (Duel.Phase == DuelPhase.Battle)
                 return FusionPreferenceMasterOfChaos;
+
+            // 1.5) 对面有怪挡路、但我方攻击力够斩杀 → 混沌②清场，全体直击
+            if (ChaosWipeLethal())
+            {
+                Trace("Eye: chaos wipe lethal (enemyLP=" + Enemy.LifePoints + ")");
+                return FusionPreferenceMasterOfChaos;
+            }
 
             // 2) 对面龙族堆积 → 帕拉丁
             int dragons = Enemy.GetMonsters().Count(card => card != null && card.HasRace(CardRace.Dragon))
@@ -2021,6 +2089,9 @@ AddExecutor(ExecutorType.Summon, CardId.MagiciansRod, () => true);
             return count;
         }
 
+        /// <summary>访问码语者的指定素材（塞勒涅 + 1 只），在 OnSelectLinkMaterial 里直接用掉。</summary>
+        private List<ClientCard> _accesscodeMats;
+
         private bool AccesscodeSummon()
         {
             // 现有场面直接攻击就能打死 → 不做访问，直接打
@@ -2039,7 +2110,29 @@ AddExecutor(ExecutorType.Summon, CardId.MagiciansRod, () => true);
             if (!hasLinkMaterial)
                 return false;
 
-            return Bot.GetMonsters().Count(card => card.HasType(CardType.Effect)) >= 2;
+            // 素材只能是「塞勒涅(Link-3) + 1 只怪兽」：
+            // 4 只怪凑 Link-4 会把整个场面烧光（实战 R#5358 就是这么输掉的资源）。
+            // 没有塞勒涅就先别出访问 —— 先做塞勒涅再转。
+            ClientCard selene = Bot.GetMonsters()
+                .FirstOrDefault(card => card != null && card.IsCode(CardId.Selene));
+            if (selene == null)
+            {
+                Trace("Accesscode skipped: no Selene");
+                return false;
+            }
+            ClientCard partner = Bot.GetMonsters()
+                .Where(card => card != null && !card.Equals(selene) && !IsKeyMonster(card))
+                .OrderBy(card => card.Attack)
+                .FirstOrDefault();
+            if (partner == null)
+            {
+                Trace("Accesscode skipped: no partner for Selene");
+                return false;
+            }
+
+            _accesscodeMats = new List<ClientCard> { selene, partner };
+            Trace("Accesscode: materials=Selene+" + partner.Id);
+            return true;
         }
 
         // =====================================================================
@@ -2097,7 +2190,10 @@ AddExecutor(ExecutorType.Summon, CardId.MagiciansRod, () => true);
 
         private bool DarkMagicianOfDestructionEffect()
         {
-            AI.SelectCard(DestructionSearchTarget());
+            int target = DestructionSearchTarget();
+            Trace("Destroy: search " + target + " (curtain hand=" + Bot.HasInHand(CardId.DarkMagicCurtain)
+                + " grave=" + Bot.HasInGraveyard(CardId.DarkMagicCurtain) + ")");
+            AI.SelectCard(target);
             return true;
         }
 
@@ -2149,7 +2245,10 @@ AddExecutor(ExecutorType.Summon, CardId.MagiciansRod, () => true);
                 .FirstOrDefault(card => card.HasAttribute(CardAttribute.Dark) && !card.Equals(light));
             if (light == null || dark == null)
                 return false;
-            if (Enemy.GetMonsterCount() < 2)
+            // 只剩 1 只阻挡怪时也值得清：只要这一波能斩杀
+            if (Enemy.GetMonsterCount() < 2 && CurrentPlan() != Plan.Lethal && !ChaosWipeLethal())
+                return false;
+            if (Enemy.GetMonsterCount() == 0)
                 return false;
 
             Trace("MasterOfChaos: banish all, enemy monsters=" + Enemy.GetMonsterCount());
@@ -2672,6 +2771,19 @@ AddExecutor(ExecutorType.Summon, CardId.MagiciansRod, () => true);
             if (data != null && data.Attack == 0 && positions.Contains(CardPosition.FaceUpDefence))
                 return CardPosition.FaceUpDefence;
 
+            // 师徒② 被破坏时拉回来的黑魔术师 / 黑魔术少女：
+            // 在对方战斗阶段特召，如果对面还有 2500 以上的打点，就守备表示上来
+            // （攻表当场被战破，等于白拉；守备至少能挡一拳）
+            if ((cardId == CardId.DarkMagician || cardId == CardId.DarkMagicianGirl)
+                && Duel.Player == 1
+                && (Duel.Phase == DuelPhase.Battle || Duel.Phase == DuelPhase.BattleStart)
+                && positions.Contains(CardPosition.FaceUpDefence)
+                && Enemy.GetMonsters().Any(card => card != null && card.Id != 0 && card.Attack >= 2500))
+            {
+                Trace("Position: " + cardId + " defense (enemy >=2500 in battle phase)");
+                return CardPosition.FaceUpDefence;
+            }
+
             if (cardId == CardId.MagiciansRod
                 || cardId == CardId.MagiciansSouls
                 || cardId == CardId.PalladiumOracleMana
@@ -2718,6 +2830,22 @@ AddExecutor(ExecutorType.Summon, CardId.MagiciansRod, () => true);
         {
             if (cards == null || cards.Count == 0)
                 return null;
+
+            // 访问码语者：只认「塞勒涅 + 1 只」这一组素材（其余情况宁可不出）
+            if (_accesscodeMats != null)
+            {
+                // 引擎传进来的可能是同一张卡的另一个包装实例，按 id+位置匹配
+                List<ClientCard> forced = cards
+                    .Where(card => card != null && _accesscodeMats.Any(m => m != null
+                        && m.Id == card.Id && m.Location == card.Location && m.Sequence == card.Sequence))
+                    .ToList();
+                _accesscodeMats = null;
+                if (forced.Count == 2)
+                {
+                    Trace("Accesscode: use forced materials");
+                    return Util.CheckSelectCount(forced, cards, min, max);
+                }
+            }
 
             List<ClientCard> ordered = new List<ClientCard>();
 
@@ -3049,6 +3177,7 @@ AddExecutor(ExecutorType.Summon, CardId.MagiciansRod, () => true);
             base.OnNewTurn();
             _chaosKnightByKnightsTitle = false;
             _spellActivatedThisTurn = false;
+            _soulServantUsedThisTurn = false;
             _eyeActivatedThisTurn = false;
             _eyeFusionId = 0;
             _curtainStage = 0;
@@ -3070,6 +3199,9 @@ AddExecutor(ExecutorType.Summon, CardId.MagiciansRod, () => true);
             base.OnChaining(player, card);
             if (player == 0 && card != null && card.IsSpell())
                 _spellActivatedThisTurn = true;
+            if (player == 0 && card != null && card.IsCode(CardId.SoulServant))
+                _soulServantUsedThisTurn = true;
         }
     }
+
 }
